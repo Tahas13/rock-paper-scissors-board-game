@@ -6,7 +6,6 @@ import os
 from typing import List, Tuple, Dict, Optional
 from pygame import mixer
 
-# Initialize pygame
 pygame.init()
 mixer.init()
 
