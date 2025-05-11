@@ -208,7 +208,7 @@ You can read the full project report here:
 ## 🎥 Demo Video
 
 Watch our gameplay demo and AI explanation here:  
-[▶️ Watch on YouTube](https://github.com/Tahas13/rock-paper-scissors-board-game/blob/main/AI_Project%20Demo.mp4)
+[▶️ Watch ](https://github.com/Tahas13/rock-paper-scissors-board-game/blob/main/AI_Project%20Demo.mp4)
 
 
 
