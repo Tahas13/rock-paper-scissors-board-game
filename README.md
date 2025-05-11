@@ -196,6 +196,21 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Pygame community for the excellent game development library
 - Rock-Paper-Scissors for the timeless game mechanic
 
+  
+
+---
+
+## 📄 Project Report
+
+You can read the full project report here:  
+[📥 Download Project Report (DOCX)](./Rock_Paper_Scissors_AI_Game_Report.pdf)
+
+## 🎥 Demo Video
+
+Watch our gameplay demo and AI explanation here:  
+[▶️ Watch on YouTube](https://www.youtube.com/watch?v=your_video_id)
+
+
 
 ---
 
