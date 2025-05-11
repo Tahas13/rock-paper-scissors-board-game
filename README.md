@@ -84,7 +84,7 @@ pip install pygame
 3. Run the game:
 
 ```shellscript
-python rps_board_game_complete.py
+python game.py
 ```
 
 
