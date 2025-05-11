@@ -203,7 +203,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📄 Project Report
 
 You can read the full project report here:  
-[📥 Download Project Report (DOCX)](./Rock_Paper_Scissors_AI_Game_Report(1).pdf)
+[📥 Download Project Report (PDF)](./Rock_Paper_Scissors_AI_Game_Report(1).pdf)
 
 ## 🎥 Demo Video
 
