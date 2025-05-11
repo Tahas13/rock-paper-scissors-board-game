@@ -3,9 +3,11 @@ import sys
 import random
 import time
 import os
+import math
 from typing import List, Tuple, Dict, Optional
 from pygame import mixer
 
+# Initialize pygame
 pygame.init()
 mixer.init()
 
@@ -31,6 +33,13 @@ HIGHLIGHT = (255, 255, 0, 100)  # Semi-transparent yellow
 VALID_MOVE = (0, 255, 0, 100)   # Semi-transparent green
 TIMER_WARNING = (255, 50, 50)   # Red for timer warning
 
+# Menu colors
+MENU_BG_TOP = (25, 10, 80)      # Dark purple
+MENU_BG_BOTTOM = (45, 20, 100)  # Slightly lighter purple
+BUTTON_COLOR = (70, 90, 180)    # Blue-purple
+BUTTON_HOVER = (90, 110, 210)   # Lighter blue-purple
+BUTTON_BORDER = (120, 140, 255) # Light blue-purple
+
 # Player colors
 PLAYER_COLORS = [
     (220, 20, 60),    # Player 1: Crimson
@@ -38,8 +47,8 @@ PLAYER_COLORS = [
     (50, 205, 50)     # Player 3: Lime Green
 ]
 
-# Sound effects paths
-SOUNDS = {
+# Sound effects paths - these would be replaced with actual file paths
+SOUND_FILES = {
     'select': 'select.wav',
     'move': 'move.wav',
     'combat_rock': 'combat_rock.wav',
@@ -53,7 +62,12 @@ SOUNDS = {
     'background': 'background_music.wav'
 }
 
+#------------------------------------------------------------------------------
+# Game Classes
+#------------------------------------------------------------------------------
+
 class Piece:
+    """Represents a game piece (Rock, Paper, or Scissors)"""
     def __init__(self, piece_type: str, player_id: int):
         """
         Initialize a game piece
@@ -70,6 +84,7 @@ class Piece:
         return f"{self.type}{self.player_id}"
 
 class Board:
+    """Represents the game board"""
     def __init__(self, size: int = 6):
         """
         Initialize the game board
@@ -199,6 +214,7 @@ class Board:
         return pieces
 
 class Player:
+    """Represents a player in the game"""
     def __init__(self, player_id: int, name: str, piece_types: List[str], piece_count: int = 4):
         """
         Initialize a player
@@ -231,6 +247,7 @@ class Player:
         return piece
 
 class Game:
+    """Main game logic class"""
     def __init__(self, num_players: int = 2):
         """
         Initialize the game
@@ -393,7 +410,442 @@ class Game:
         
         return False
 
+#------------------------------------------------------------------------------
+# AI Classes
+#------------------------------------------------------------------------------
+
+class AIPlayer:
+    """Base class for all AI players"""
+    def __init__(self, game, difficulty="medium"):
+        self.game = game
+        self.difficulty = difficulty
+        self.thinking_time = 0.5  # Default thinking time in seconds
+    
+    def choose_move(self):
+        """Choose a move based on the current game state"""
+        # Base implementation - should be overridden by subclasses
+        pass
+    
+    def get_valid_pieces_with_moves(self, player_id):
+        """Get all pieces with valid moves for a player"""
+        valid_pieces = []
+        pieces = self.game.board.get_player_pieces(player_id)
+        
+        for row, col, piece in pieces:
+            valid_moves = self.game.get_valid_moves(row, col)
+            if valid_moves:
+                valid_pieces.append((row, col, piece, valid_moves))
+        
+        return valid_pieces
+
+class RandomAI(AIPlayer):
+    """Easy difficulty AI - makes completely random moves"""
+    def __init__(self, game):
+        super().__init__(game, "easy")
+        self.thinking_time = 0.3  # Faster decisions for easy AI
+    
+    def choose_move(self):
+        """Choose a completely random move"""
+        current_player = self.game.players[self.game.current_player_index]
+        valid_pieces = self.get_valid_pieces_with_moves(current_player.id)
+        
+        if not valid_pieces:
+            return None, None, None, None
+        
+        # Select a random piece and a random valid move
+        row, col, piece, valid_moves = random.choice(valid_pieces)
+        to_row, to_col = random.choice(valid_moves)
+        
+        return row, col, to_row, to_col
+
+class BasicAI(AIPlayer):
+    """Medium difficulty AI - uses basic rules and priorities"""
+    def __init__(self, game):
+        super().__init__(game, "medium")
+        self.thinking_time = 0.5
+    
+    def choose_move(self):
+        """Choose a move using basic rules"""
+        current_player = self.game.players[self.game.current_player_index]
+        valid_pieces = self.get_valid_pieces_with_moves(current_player.id)
+        
+        if not valid_pieces:
+            return None, None, None, None
+        
+        # Shuffle to add some randomness
+        random.shuffle(valid_pieces)
+        
+        # For each piece, categorize its moves
+        for row, col, piece, valid_moves in valid_pieces:
+            capturing_moves = []
+            safe_moves = []
+            risky_moves = []
+            
+            for to_row, to_col in valid_moves:
+                target = self.game.board.grid[to_row][to_col]
+                
+                if target is None:
+                    # Empty cell - safe move
+                    safe_moves.append((to_row, to_col))
+                else:
+                    # Combat will happen - evaluate outcome
+                    result = self.game.board.resolve_combat(piece, target)
+                    if result == 1:  # We win
+                        capturing_moves.append((to_row, to_col))
+                    elif result == -1:  # We lose
+                        risky_moves.append((to_row, to_col))
+                    # Draw is also risky, so add to risky_moves
+                    else:
+                        risky_moves.append((to_row, to_col))
+            
+            # Choose the best move for this piece based on priority
+            if capturing_moves:
+                return row, col, *random.choice(capturing_moves)
+            elif safe_moves:
+                return row, col, *random.choice(safe_moves)
+            elif risky_moves and random.random() < 0.2:  # 20% chance to make a risky move
+                return row, col, *random.choice(risky_moves)
+        
+        # If we get here, just pick a random move
+        row, col, piece, valid_moves = random.choice(valid_pieces)
+        to_row, to_col = random.choice(valid_moves)
+        return row, col, to_row, to_col
+
+class AdvancedAI(AIPlayer):
+    """Hard difficulty AI - uses advanced evaluation and limited look-ahead"""
+    def __init__(self, game):
+        super().__init__(game, "hard")
+        self.thinking_time = 0.8
+    
+    def choose_move(self):
+        """Choose a move using advanced evaluation"""
+        current_player = self.game.players[self.game.current_player_index]
+        valid_pieces = self.get_valid_pieces_with_moves(current_player.id)
+        
+        if not valid_pieces:
+            return None, None, None, None
+        
+        best_score = float('-inf')
+        best_move = None
+        
+        # Evaluate each possible move
+        for row, col, piece, valid_moves in valid_pieces:
+            for to_row, to_col in valid_moves:
+                # Simulate the move
+                score = self.evaluate_move(row, col, to_row, to_col, current_player.id)
+                
+                # Keep track of the best move
+                if score > best_score:
+                    best_score = score
+                    best_move = (row, col, to_row, to_col)
+        
+        if best_move:
+            return best_move
+        
+        # Fallback to random move if no good move found
+        row, col, piece, valid_moves = random.choice(valid_pieces)
+        to_row, to_col = random.choice(valid_moves)
+        return row, col, to_row, to_col
+    
+    def evaluate_move(self, from_row, from_col, to_row, to_col, player_id):
+        """Evaluate a potential move"""
+        # Get the current state
+        board = self.game.board
+        moving_piece = board.grid[from_row][from_col]
+        target_piece = board.grid[to_row][to_col]
+        
+        # Base score
+        score = 0
+        
+        # Evaluate combat outcome if applicable
+        if target_piece is not None:
+            result = board.resolve_combat(moving_piece, target_piece)
+            if result == 1:  # We win
+                score += 10  # Capturing an opponent's piece is good
+            elif result == -1:  # We lose
+                score -= 15  # Losing our piece is bad
+            else:  # Draw
+                score -= 5  # Draws are slightly negative as we lose a piece
+        
+        # Evaluate position
+        # Center control is valuable
+        center_value = 4 - (abs(to_row - 2.5) + abs(to_col - 2.5))
+        score += center_value
+        
+        # Evaluate piece type distribution after move
+        my_pieces = board.get_player_pieces(player_id)
+        type_counts = {'R': 0, 'P': 0, 'S': 0}
+        
+        for r, c, p in my_pieces:
+            if r == from_row and c == from_col:
+                continue  # Skip the piece that's moving
+            type_counts[p.type] += 1
+        
+        # Add the moving piece in its new position
+        type_counts[moving_piece.type] += 1
+        
+        # Penalize imbalanced distribution
+        min_count = min(type_counts.values())
+        score += min_count * 2  # Reward having all types
+        
+        # Look for threats and opportunities
+        score += self.evaluate_threats_and_opportunities(to_row, to_col, moving_piece, player_id)
+        
+        return score
+    
+    def evaluate_threats_and_opportunities(self, row, col, piece, player_id):
+        """Evaluate threats and opportunities from a position"""
+        score = 0
+        board = self.game.board
+        
+        # Check adjacent cells
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        for dr, dc in directions:
+            new_row, new_col = row + dr, col + dc
+            
+            if 0 <= new_row < board.size and 0 <= new_col < board.size:
+                target = board.grid[new_row][new_col]
+                
+                if target is not None and target.player_id != player_id:
+                    # There's an opponent piece adjacent
+                    result = board.resolve_combat(piece, target)
+                    if result == 1:  # We can capture it next turn
+                        score += 3
+                    elif result == -1:  # It can capture us next turn
+                        score -= 5
+        
+        return score
+
+class MinimaxAI(AIPlayer):
+    """Expert difficulty AI - uses minimax with alpha-beta pruning"""
+    def __init__(self, game):
+        super().__init__(game, "expert")
+        self.thinking_time = 1.2
+        self.max_depth = 2  # Maximum search depth
+    
+    def choose_move(self):
+        """Choose a move using minimax algorithm"""
+        current_player = self.game.players[self.game.current_player_index]
+        valid_pieces = self.get_valid_pieces_with_moves(current_player.id)
+        
+        if not valid_pieces:
+            return None, None, None, None
+        
+        best_score = float('-inf')
+        best_move = None
+        
+        # Use minimax to evaluate each possible move
+        for row, col, piece, valid_moves in valid_pieces:
+            for to_row, to_col in valid_moves:
+                # Create a copy of the board for simulation
+                board_copy = self.copy_board()
+                
+                # Simulate the move
+                self.make_move_on_copy(board_copy, row, col, to_row, to_col)
+                
+                # Evaluate using minimax
+                score = self.minimax(board_copy, self.max_depth - 1, False, 
+                                    current_player.id, float('-inf'), float('inf'))
+                
+                # Keep track of the best move
+                if score > best_score:
+                    best_score = score
+                    best_move = (row, col, to_row, to_col)
+        
+        if best_move:
+            return best_move
+        
+        # Fallback to random move if no good move found
+        row, col, piece, valid_moves = random.choice(valid_pieces)
+        to_row, to_col = random.choice(valid_moves)
+        return row, col, to_row, to_col
+    
+    def copy_board(self):
+        """Create a copy of the current board state"""
+        # This is a simplified copy that just tracks piece positions
+        # A full implementation would copy the entire game state
+        board_copy = []
+        for row in range(self.game.board.size):
+            board_row = []
+            for col in range(self.game.board.size):
+                piece = self.game.board.grid[row][col]
+                if piece:
+                    board_row.append((piece.type, piece.player_id))
+                else:
+                    board_row.append(None)
+            board_copy.append(board_row)
+        return board_copy
+    
+    def make_move_on_copy(self, board_copy, from_row, from_col, to_row, to_col):
+        """Make a move on the copied board"""
+        moving_piece = board_copy[from_row][from_col]
+        target_piece = board_copy[to_row][to_col]
+        
+        if target_piece is None:
+            # Simple move to empty space
+            board_copy[to_row][to_col] = moving_piece
+            board_copy[from_row][from_col] = None
+        else:
+            # Combat resolution
+            piece_type, player_id = moving_piece
+            target_type, target_player_id = target_piece
+            
+            # Determine combat outcome
+            if piece_type == target_type:
+                # Draw - both pieces removed
+                board_copy[from_row][from_col] = None
+                board_copy[to_row][to_col] = None
+            elif ((piece_type == 'R' and target_type == 'S') or
+                  (piece_type == 'P' and target_type == 'R') or
+                  (piece_type == 'S' and target_type == 'P')):
+                # Moving piece wins
+                board_copy[to_row][to_col] = moving_piece
+                board_copy[from_row][from_col] = None
+            else:
+                # Target piece wins
+                board_copy[from_row][from_col] = None
+    
+    def minimax(self, board, depth, is_maximizing, player_id, alpha, beta):
+        """Minimax algorithm with alpha-beta pruning"""
+        # Base case: reached max depth or game over
+        if depth == 0:
+            return self.evaluate_board(board, player_id)
+        
+        # Get next player
+        next_player_index = (self.game.current_player_index + (0 if is_maximizing else 1)) % len(self.game.players)
+        next_player_id = self.game.players[next_player_index].id
+        
+        if is_maximizing:
+            max_eval = float('-inf')
+            for move in self.get_possible_moves(board, player_id):
+                from_row, from_col, to_row, to_col = move
+                
+                # Create a copy and make the move
+                board_copy = [row[:] for row in board]
+                self.make_move_on_copy(board_copy, from_row, from_col, to_row, to_col)
+                
+                # Recursive evaluation
+                eval = self.minimax(board_copy, depth - 1, False, player_id, alpha, beta)
+                max_eval = max(max_eval, eval)
+                
+                # Alpha-beta pruning
+                alpha = max(alpha, eval)
+                if beta <= alpha:
+                    break
+                
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for move in self.get_possible_moves(board, next_player_id):
+                from_row, from_col, to_row, to_col = move
+                
+                # Create a copy and make the move
+                board_copy = [row[:] for row in board]
+                self.make_move_on_copy(board_copy, from_row, from_col, to_row, to_col)
+                
+                # Recursive evaluation
+                eval = self.minimax(board_copy, depth - 1, True, player_id, alpha, beta)
+                min_eval = min(min_eval, eval)
+                
+                # Alpha-beta pruning
+                beta = min(beta, eval)
+                if beta <= alpha:
+                    break
+                
+            return min_eval
+    
+    def get_possible_moves(self, board, player_id):
+        """Get all possible moves for a player on the given board"""
+        moves = []
+        for row in range(len(board)):
+            for col in range(len(board[row])):
+                piece = board[row][col]
+                if piece and piece[1] == player_id:
+                    # This is the player's piece, find valid moves
+                    for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                        new_row, new_col = row + dr, col + dc
+                        
+                        if 0 <= new_row < len(board) and 0 <= new_col < len(board[0]):
+                            target = board[new_row][new_col]
+                            
+                            # Valid move if empty or enemy piece
+                            if target is None or target[1] != player_id:
+                                moves.append((row, col, new_row, new_col))
+        
+        return moves
+    
+    def evaluate_board(self, board, player_id):
+        """Evaluate the board position for a player"""
+        score = 0
+        
+        # Count pieces and their types
+        my_pieces = {'R': 0, 'P': 0, 'S': 0}
+        opponent_pieces = {}
+        
+        for row in board:
+            for piece in row:
+                if piece:
+                    piece_type, pid = piece
+                    if pid == player_id:
+                        my_pieces[piece_type] += 1
+                    else:
+                        if pid not in opponent_pieces:
+                            opponent_pieces[pid] = {'R': 0, 'P': 0, 'S': 0}
+                        opponent_pieces[pid][piece_type] += 1
+        
+        # Material advantage
+        my_total = sum(my_pieces.values())
+        opponent_total = sum(sum(p.values()) for p in opponent_pieces.values())
+        score += (my_total - opponent_total) * 10
+        
+        # Type balance
+        min_type_count = min(my_pieces.values())
+        score += min_type_count * 5
+        
+        # Position evaluation - control of center
+        center_positions = [(2, 2), (2, 3), (3, 2), (3, 3)]
+        for r, c in center_positions:
+            if 0 <= r < len(board) and 0 <= c < len(board[0]):
+                piece = board[r][c]
+                if piece and piece[1] == player_id:
+                    score += 3
+        
+        # Strategic positioning - evaluate matchups against opponent pieces
+        for row_idx, row in enumerate(board):
+            for col_idx, piece in enumerate(row):
+                if piece and piece[1] == player_id:
+                    piece_type = piece[0]
+                    
+                    # Check adjacent cells for favorable matchups
+                    for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                        new_row, new_col = row_idx + dr, col_idx + dc
+                        
+                        if 0 <= new_row < len(board) and 0 <= new_col < len(board[0]):
+                            target = board[new_row][new_col]
+                            
+                            if target and target[1] != player_id:
+                                target_type = target[0]
+                                
+                                # Evaluate matchup
+                                if ((piece_type == 'R' and target_type == 'S') or
+                                    (piece_type == 'P' and target_type == 'R') or
+                                    (piece_type == 'S' and target_type == 'P')):
+                                    # Favorable matchup
+                                    score += 2
+                                elif ((piece_type == 'R' and target_type == 'P') or
+                                      (piece_type == 'P' and target_type == 'S') or
+                                      (piece_type == 'S' and target_type == 'R')):
+                                    # Unfavorable matchup
+                                    score -= 2
+        
+        return score
+
+#------------------------------------------------------------------------------
+# Sound Manager
+#------------------------------------------------------------------------------
+
 class SoundManager:
+    """Manages game sound effects and music"""
     def __init__(self):
         """Initialize the sound manager"""
         # Initialize mixer if not already initialized
@@ -414,23 +866,8 @@ class SoundManager:
         if not self.sound_enabled:
             return
             
-        # Define sound files - in a real implementation, you would have actual files
-        sound_files = {
-            'select': 'select.wav',
-            'move': 'move.wav',
-            'combat_rock': 'combat_rock.wav',
-            'combat_paper': 'combat_paper.wav',
-            'combat_scissors': 'combat_scissors.wav',
-            'win': 'win.wav',
-            'lose': 'lose.wav',
-            'timer_tick': 'timer_tick.wav',
-            'menu_click': 'menu_click.wav',
-            'game_start': 'game_start.wav',
-            'background': 'background_music.wav'
-        }
-        
         # Try to load sound files if they exist, otherwise create dummy sounds
-        for sound_name, file_name in sound_files.items():
+        for sound_name, file_name in SOUND_FILES.items():
             try:
                 # Check if the file exists
                 if os.path.exists(file_name):
@@ -491,9 +928,12 @@ class SoundManager:
                 # Silently fail if stopping doesn't work
                 pass
 
-
+#------------------------------------------------------------------------------
+# Game GUI
+#------------------------------------------------------------------------------
 
 class GameGUI:
+    """Main game GUI class"""
     def __init__(self):
         """Initialize the game GUI"""
         # Set up the display with resizable flag
@@ -515,6 +955,9 @@ class GameGUI:
         self.animation_timer = 0
         self.combat_animation = None
         self.ai_mode = False
+        self.ai_vs_ai = False
+        self.ai_difficulty = "medium"  # Default difficulty
+        self.ai_player = None
         self.last_time = time.time()
         
         # Load background images
@@ -530,18 +973,23 @@ class GameGUI:
         
         # Animation variables
         self.animations = []
+        self.menu_animation_time = 0
+        
+        # Start background music
+        self.sound_manager.play_background_music()
         
     def load_fonts(self):
         """Load fonts for the game"""
         try:
-            self.font = pygame.font.SysFont("Arial", 24)
+            # Try to use nicer fonts if available
+            self.font = pygame.font.SysFont("Arial", 18)
             self.title_font = pygame.font.SysFont("Arial", 48, bold=True)
-            self.button_font = pygame.font.SysFont("Arial", 32)
+            self.button_font = pygame.font.SysFont("Arial", 24)
         except:
             # Fallback to default font if custom font fails
-            self.font = pygame.font.Font(None, 24)
+            self.font = pygame.font.Font(None, 18)
             self.title_font = pygame.font.Font(None, 48)
-            self.button_font = pygame.font.Font(None, 32)
+            self.button_font = pygame.font.Font(None, 24)
     
     def update_cell_size(self):
         """Update cell size based on screen dimensions"""
@@ -551,62 +999,61 @@ class GameGUI:
         self.cell_size = min(max_width, max_height)
     
     def create_background(self):
-        """Create a background image"""
-        # Create a gradient background
+        """Create a background image with stars"""
+        # Create a gradient background from dark blue to purple
         background = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         for y in range(SCREEN_HEIGHT):
-            # Create a gradient from dark blue to light blue
-            color = (
-                int(20 + (y / SCREEN_HEIGHT) * 50),
-                int(20 + (y / SCREEN_HEIGHT) * 50),
-                int(50 + (y / SCREEN_HEIGHT) * 150)
-            )
+            # Create a gradient from dark blue to purple
+            progress = y / SCREEN_HEIGHT
+            r = int(MENU_BG_TOP[0] + progress * (MENU_BG_BOTTOM[0] - MENU_BG_TOP[0]))
+            g = int(MENU_BG_TOP[1] + progress * (MENU_BG_BOTTOM[1] - MENU_BG_TOP[1]))
+            b = int(MENU_BG_TOP[2] + progress * (MENU_BG_BOTTOM[2] - MENU_BG_TOP[2]))
+            color = (r, g, b)
             pygame.draw.line(background, color, (0, y), (SCREEN_WIDTH, y))
-            
-        # Add some decorative elements
-        for _ in range(50):
+    
+        # Add stars (small white dots)
+        for _ in range(150):
             x = random.randint(0, SCREEN_WIDTH)
             y = random.randint(0, SCREEN_HEIGHT)
-            radius = random.randint(1, 3)
-            color = (255, 255, 255, random.randint(50, 150))
+            radius = random.randint(1, 2)
+            brightness = random.randint(180, 255)
+            color = (brightness, brightness, brightness)
             pygame.draw.circle(background, color, (x, y), radius)
-            
+    
         return background
     
     def create_logo(self):
-        """Create a game logo"""
+        """Create a game logo matching the design"""
         logo_size = 200
         logo = pygame.Surface((logo_size, logo_size), pygame.SRCALPHA)
-        
-        # Draw a circular background
-        pygame.draw.circle(logo, (200, 200, 200, 200), (logo_size//2, logo_size//2), logo_size//2)
-        
-        # Draw the three symbols in a circle
-        radius = logo_size // 3
+    
+        # Draw a circular gray background
+        pygame.draw.circle(logo, (180, 180, 190, 220), (logo_size//2, logo_size//2), logo_size//2)
+    
+        # Draw the three symbols in white
         center = (logo_size//2, logo_size//2)
-        
-        # Rock (top)
-        rock_pos = (center[0], center[1] - radius//2)
-        pygame.draw.circle(logo, (150, 150, 150), rock_pos, radius//3)
-        
-        # Paper (bottom left)
-        paper_pos = (center[0] - radius//2, center[1] + radius//2)
-        pygame.draw.rect(logo, (250, 250, 250), (paper_pos[0] - radius//4, paper_pos[1] - radius//4, radius//2, radius//2))
-        
-        # Scissors (bottom right)
-        scissors_pos = (center[0] + radius//2, center[1] + radius//2)
-        pygame.draw.line(logo, (200, 200, 200), 
-                        (scissors_pos[0] - radius//4, scissors_pos[1] - radius//4),
-                        (scissors_pos[0] + radius//4, scissors_pos[1] + radius//4), 5)
-        pygame.draw.line(logo, (200, 200, 200), 
-                        (scissors_pos[0] - radius//4, scissors_pos[1] + radius//4),
-                        (scissors_pos[0] + radius//4, scissors_pos[1] - radius//4), 5)
-        
-        # Draw connecting lines
-        pygame.draw.line(logo, (255, 255, 255), rock_pos, paper_pos, 2)
-        pygame.draw.line(logo, (255, 255, 255), paper_pos, scissors_pos, 2)
-        pygame.draw.line(logo, (255, 255, 255), scissors_pos, rock_pos, 2)
-        
+    
+        # Rock (triangle at top)
+        rock_points = [
+            (center[0], center[1] - 40),  # Top
+            (center[0] - 30, center[1] + 20),  # Bottom left
+            (center[0] + 30, center[1] + 20)   # Bottom right
+        ]
+        pygame.draw.polygon(logo, (255, 255, 255), rock_points, 2)
+    
+        # Paper (square at bottom left)
+        paper_rect = pygame.Rect(center[0] - 50, center[1] - 10, 30, 30)
+        pygame.draw.rect(logo, (255, 255, 255), paper_rect)
+    
+        # Scissors (X at bottom right)
+        scissors_center = (center[0] + 30, center[1])
+        pygame.draw.line(logo, (255, 255, 255), 
+                        (scissors_center[0] - 15, scissors_center[1] - 15),
+                        (scissors_center[0] + 15, scissors_center[1] + 15), 2)
+        pygame.draw.line(logo, (255, 255, 255), 
+                        (scissors_center[0] - 15, scissors_center[1] + 15),
+                        (scissors_center[0] + 15, scissors_center[1] - 15), 2)
+    
         return logo
     
     def update_piece_images(self):
@@ -627,55 +1074,88 @@ class GameGUI:
         
         # Draw the piece based on type and player
         if piece_type == 'R':  # Rock
-            # Draw a rock shape with player color
-            pygame.draw.circle(surface, player_color, (size//2, size//2), size//2)
-            # Add some details to make it look like a rock
-            for _ in range(5):
-                x = random.randint(size//4, 3*size//4)
-                y = random.randint(size//4, 3*size//4)
-                r = random.randint(2, 5)
-                # Darken or lighten the player color for details
-                detail_color = tuple(max(0, min(255, c + random.randint(-50, 50))) for c in player_color)
-                pygame.draw.circle(surface, detail_color, (x, y), r)
+            # Draw a rock shape (triangle) with player color
+            points = [
+                (size//2, size//5),  # Top
+                (size//5, 4*size//5),  # Bottom left
+                (4*size//5, 4*size//5)  # Bottom right
+            ]
+            pygame.draw.polygon(surface, player_color, points)
+            pygame.draw.polygon(surface, BLACK, points, 2)  # Border
             
         elif piece_type == 'P':  # Paper
-            # Draw a paper shape with player color
-            pygame.draw.rect(surface, player_color, (5, 5, size-10, size-10))
+            # Draw a paper shape (square) with player color
+            paper_rect = pygame.Rect(size//5, size//5, 3*size//5, 3*size//5)
+            pygame.draw.rect(surface, player_color, paper_rect)
+            pygame.draw.rect(surface, BLACK, paper_rect, 2)  # Border
+            
             # Add some lines to represent paper
-            line_color = tuple(max(0, min(255, c + 50)) for c in player_color)
-            pygame.draw.line(surface, line_color, (10, size//3), (size-10, size//3), 1)
-            pygame.draw.line(surface, line_color, (10, 2*size//3), (size-10, 2*size//3), 1)
+            line_color = BLACK
+            pygame.draw.line(surface, line_color, (size//4, size//2), (3*size//4, size//2), 1)
+            pygame.draw.line(surface, line_color, (size//4, 2*size//3), (3*size//4, 2*size//3), 1)
             
         elif piece_type == 'S':  # Scissors
-            # Draw scissors with player color
-            # Draw scissors handle
-            pygame.draw.circle(surface, player_color, (size//4, size//2), size//6)
-            pygame.draw.circle(surface, player_color, (3*size//4, size//2), size//6)
-            # Draw blades
-            blade_color = tuple(max(0, min(255, c - 30)) for c in player_color)
-            pygame.draw.line(surface, blade_color, (size//4, size//3), (3*size//4, size//3), 3)
-            pygame.draw.line(surface, blade_color, (size//4, 2*size//3), (3*size//4, 2*size//3), 3)
+            # Draw scissors (X shape) with player color
+            center = (size//2, size//2)
+            length = size//3
+            
+            # Draw the X
+            pygame.draw.line(surface, player_color, 
+                            (center[0] - length, center[1] - length),
+                            (center[0] + length, center[1] + length), 5)
+            pygame.draw.line(surface, player_color, 
+                            (center[0] - length, center[1] + length),
+                            (center[0] + length, center[1] - length), 5)
+            
+            # Draw border
+            pygame.draw.line(surface, BLACK, 
+                            (center[0] - length, center[1] - length),
+                            (center[0] + length, center[1] + length), 1)
+            pygame.draw.line(surface, BLACK, 
+                            (center[0] - length, center[1] + length),
+                            (center[0] + length, center[1] - length), 1)
         
         # Add text label
         text = self.font.render(piece_type, True, BLACK)
         text_rect = text.get_rect(center=(size//2, size//2))
         surface.blit(text, text_rect)
         
-        # Add a border
-        pygame.draw.rect(surface, BLACK, (0, 0, size, size), 2, border_radius=5)
+        # Add a circular background
+        circle_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(circle_surface, (*player_color, 100), (size//2, size//2), size//2)
         
-        return surface
+        # Combine surfaces
+        final_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        final_surface.blit(circle_surface, (0, 0))
+        final_surface.blit(surface, (0, 0))
+        
+        return final_surface
     
     def draw_board(self):
-        """Draw the game board"""
+        """Draw the game board with improved visuals"""
         board_width = BOARD_SIZE * self.cell_size
         board_height = BOARD_SIZE * self.cell_size
         board_x = (self.screen.get_width() - board_width) // 2
         board_y = (self.screen.get_height() - board_height) // 2
         
-        # Draw board background
-        pygame.draw.rect(self.screen, LIGHT_GRAY, (board_x, board_y, board_width, board_height))
-        
+        # Draw board background with a slight gradient
+        for y in range(BOARD_SIZE):
+            for x in range(BOARD_SIZE):
+                cell_rect = pygame.Rect(
+                    board_x + x * self.cell_size,
+                    board_y + y * self.cell_size,
+                    self.cell_size,
+                    self.cell_size
+                )
+                
+                # Checkerboard pattern
+                if (x + y) % 2 == 0:
+                    cell_color = (220, 220, 220)  # Light gray
+                else:
+                    cell_color = (200, 200, 200)  # Slightly darker gray
+                    
+                pygame.draw.rect(self.screen, cell_color, cell_rect)
+    
         # Draw grid lines
         for i in range(BOARD_SIZE + 1):
             # Vertical lines
@@ -694,57 +1174,75 @@ class GameGUI:
                 (board_x + board_width, board_y + i * self.cell_size),
                 2 if i == 0 or i == BOARD_SIZE else 1
             )
-        
-        # Draw coordinates
+    
+        # Draw coordinates with better styling
         for i in range(BOARD_SIZE):
             # Row numbers
-            row_text = self.font.render(str(i), True, BLACK)
-            self.screen.blit(row_text, (board_x - 20, board_y + i * self.cell_size + self.cell_size // 2 - 10))
+            row_bg = pygame.Surface((20, 20), pygame.SRCALPHA)
+            pygame.draw.circle(row_bg, (50, 50, 80, 180), (10, 10), 10)
+            self.screen.blit(row_bg, (board_x - 25, board_y + i * self.cell_size + self.cell_size // 2 - 10))
+            
+            row_text = self.font.render(str(i), True, WHITE)
+            row_text_rect = row_text.get_rect(center=(board_x - 15, board_y + i * self.cell_size + self.cell_size // 2))
+            self.screen.blit(row_text, row_text_rect)
             
             # Column numbers
-            col_text = self.font.render(str(i), True, BLACK)
-            self.screen.blit(col_text, (board_x + i * self.cell_size + self.cell_size // 2 - 5, board_y - 20))
-        
+            col_bg = pygame.Surface((20, 20), pygame.SRCALPHA)
+            pygame.draw.circle(col_bg, (50, 50, 80, 180), (10, 10), 10)
+            self.screen.blit(col_bg, (board_x + i * self.cell_size + self.cell_size // 2 - 10, board_y - 25))
+            
+            col_text = self.font.render(str(i), True, WHITE)
+            col_text_rect = col_text.get_rect(center=(board_x + i * self.cell_size + self.cell_size // 2, board_y - 15))
+            self.screen.blit(col_text, col_text_rect)
+    
         # Draw pieces
         for row in range(BOARD_SIZE):
             for col in range(BOARD_SIZE):
                 piece = self.game.board.grid[row][col]
                 if piece is not None:
                     self.draw_piece(row, col, piece)
-        
-        # Highlight selected piece
+    
+        # Highlight selected piece with a glowing effect
         if self.selected_piece:
             row, col = self.selected_piece
-            pygame.draw.rect(
-                self.screen, 
-                HIGHLIGHT, 
-                (
-                    board_x + col * self.cell_size, 
-                    board_y + row * self.cell_size, 
-                    self.cell_size, 
-                    self.cell_size
+            
+            # Draw multiple circles with decreasing opacity for glow effect
+            for radius in range(10, 0, -2):
+                glow_surface = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
+                alpha = 100 - radius * 8
+                pygame.draw.rect(
+                    glow_surface, 
+                    (255, 255, 0, alpha), 
+                    (0, 0, self.cell_size, self.cell_size),
+                    border_radius=radius
                 )
-            )
-        
-        # Highlight valid moves
+                self.screen.blit(
+                    glow_surface, 
+                    (board_x + col * self.cell_size, board_y + row * self.cell_size)
+                )
+    
+        # Highlight valid moves with a pulsing effect
         for row, col in self.valid_moves:
+            # Calculate pulse effect based on time
+            pulse = (math.sin(time.time() * 5) + 1) / 2  # Value between 0 and 1
+            alpha = int(100 + pulse * 100)  # Alpha between 100 and 200
+            
+            move_surface = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
             pygame.draw.rect(
-                self.screen, 
-                VALID_MOVE, 
-                (
-                    board_x + col * self.cell_size, 
-                    board_y + row * self.cell_size, 
-                    self.cell_size, 
-                    self.cell_size
-                )
+                move_surface, 
+                (0, 255, 0, alpha), 
+                (0, 0, self.cell_size, self.cell_size),
+                border_radius=5
+            )
+            self.screen.blit(
+                move_surface, 
+                (board_x + col * self.cell_size, board_y + row * self.cell_size)
             )
     
     def draw_piece(self, row, col, piece):
         """Draw a piece on the board"""
         board_x = (self.screen.get_width() - BOARD_SIZE * self.cell_size) // 2
         board_y = (self.screen.get_height() - BOARD_SIZE * self.cell_size) // 2
-        
-       
         
         # Get the piece image
         piece_img = self.images[f"{piece.type}{piece.player_id}"]
@@ -774,7 +1272,7 @@ class GameGUI:
         timer_y = 10
         
         # Draw timer background
-        pygame.draw.rect(self.screen, DARK_GRAY, (timer_x, timer_y, timer_width, timer_height))
+        pygame.draw.rect(self.screen, DARK_GRAY, (timer_x, timer_y, timer_width, timer_height), border_radius=10)
         
         # Calculate remaining time percentage
         time_percent = max(0, min(1, self.game.turn_timer / TURN_TIME))
@@ -785,8 +1283,10 @@ class GameGUI:
         else:
             timer_color = player_color
         
-        # Draw timer bar
-        pygame.draw.rect(self.screen, timer_color, (timer_x, timer_y, int(timer_width * time_percent), timer_height))
+        # Draw timer bar with rounded corners
+        if time_percent > 0:
+            inner_rect = pygame.Rect(timer_x, timer_y, int(timer_width * time_percent), timer_height)
+            pygame.draw.rect(self.screen, timer_color, inner_rect, border_radius=10)
         
         # Draw timer text
         timer_text = self.font.render(f"{int(self.game.turn_timer)}s", True, WHITE)
@@ -799,12 +1299,22 @@ class GameGUI:
     
     def draw_game_info(self):
         """Draw game information"""
+        # Create a semi-transparent panel for game info
+        info_panel = pygame.Surface((300, 200), pygame.SRCALPHA)
+        pygame.draw.rect(info_panel, (0, 0, 50, 150), (0, 0, 300, 200), border_radius=10)
+        self.screen.blit(info_panel, (20, 20))
+        
         # Draw current player
         current_player = self.game.players[self.game.current_player_index]
         player_color = PLAYER_COLORS[current_player.id - 1]
         
-        player_text = self.font.render(f"Current Turn: {current_player.name}", True, player_color)
-        self.screen.blit(player_text, (20, 40))
+        # Create a highlight for current player
+        player_highlight = pygame.Surface((280, 30), pygame.SRCALPHA)
+        pygame.draw.rect(player_highlight, (*player_color, 100), (0, 0, 280, 30), border_radius=5)
+        self.screen.blit(player_highlight, (30, 30))
+        
+        player_text = self.font.render(f"Current Turn: {current_player.name}", True, WHITE)
+        self.screen.blit(player_text, (40, 35))
         
         # Draw piece counts for each player
         y_offset = 70
@@ -818,64 +1328,102 @@ class GameGUI:
             total = sum(piece_counts.values())
             player_color = PLAYER_COLORS[player.id - 1]
             
+            # Create a colored background for each player's info
+            player_bg = pygame.Surface((280, 25), pygame.SRCALPHA)
+            pygame.draw.rect(player_bg, (*player_color, 50), (0, 0, 280, 25), border_radius=5)
+            self.screen.blit(player_bg, (30, y_offset))
+            
             player_text = self.font.render(
                 f"{player.name}: {total} pieces (R: {piece_counts['R']}, P: {piece_counts['P']}, S: {piece_counts['S']})", 
                 True, 
-                player_color
+                WHITE
             )
-            self.screen.blit(player_text, (20, y_offset))
-            y_offset += 25
+            self.screen.blit(player_text, (40, y_offset + 5))
+            y_offset += 30
+        
+        # Display AI difficulty if in AI mode
+        if self.ai_mode and not self.ai_vs_ai:
+            difficulty_text = self.font.render(f"AI Difficulty: {self.ai_difficulty.capitalize()}", True, WHITE)
+            self.screen.blit(difficulty_text, (40, y_offset + 5))
+            y_offset += 30
+        elif self.ai_vs_ai:
+            ai_text = self.font.render("AI vs AI Game", True, WHITE)
+            self.screen.blit(ai_text, (40, y_offset + 5))
+            y_offset += 30
         
         # Draw game instructions
+        instructions_panel = pygame.Surface((300, 100), pygame.SRCALPHA)
+        pygame.draw.rect(instructions_panel, (0, 0, 50, 150), (0, 0, 300, 100), border_radius=10)
+        self.screen.blit(instructions_panel, (20, self.screen.get_height() - 120))
+        
         instructions = [
             "Click on your piece to select it",
             "Click on a highlighted cell to move",
             "Press ESC to return to menu"
         ]
         
-        y_offset = self.screen.get_height() - 80
+        y_offset = self.screen.get_height() - 110
         for instruction in instructions:
             text = self.font.render(instruction, True, WHITE)
-            self.screen.blit(text, (20, y_offset))
+            self.screen.blit(text, (40, y_offset))
             y_offset += 25
     
     def draw_menu(self):
-        """Draw the main menu"""
+        """Draw the main menu with improved UI"""
         # Draw background
         self.screen.blit(self.background_img, (0, 0))
         
-        # Draw logo
-        logo_rect = self.logo_img.get_rect(center=(self.screen.get_width() // 2, 150))
-        self.screen.blit(self.logo_img, logo_rect)
+        # Update menu animation time
+        self.menu_animation_time += 0.01
         
-        # Draw title with animation
-        title_color = (255, 255, 255)
-        title_shadow_color = (100, 100, 100)
+        # Draw animated stars (twinkling effect)
+        for _ in range(5):
+            x = random.randint(0, self.screen.get_width())
+            y = random.randint(0, self.screen.get_height())
+            size = random.randint(1, 3)
+            brightness = int(200 + 55 * math.sin(self.menu_animation_time * 5))
+            color = (brightness, brightness, brightness)
+            pygame.draw.circle(self.screen, color, (x, y), size)
         
-        # Add a shadow effect
-        title_shadow = self.title_font.render("Rock-Paper-Scissors Board Game", True, title_shadow_color)
-        title_shadow_rect = title_shadow.get_rect(center=(self.screen.get_width() // 2 + 3, 250 + 3))
+        # Draw logo with subtle animation
+        logo_scale = 1.0 + 0.03 * math.sin(self.menu_animation_time)
+        scaled_logo = pygame.transform.smoothscale(
+            self.logo_img, 
+            (int(self.logo_img.get_width() * logo_scale), 
+             int(self.logo_img.get_height() * logo_scale))
+        )
+        logo_rect = scaled_logo.get_rect(center=(self.screen.get_width() // 2, 150))
+        self.screen.blit(scaled_logo, logo_rect)
+        
+        # Draw title with shadow effect
+        title_shadow = self.title_font.render("Rock-Paper-Scissors Board Game", True, (0, 0, 0))
+        title = self.title_font.render("Rock-Paper-Scissors Board Game", True, WHITE)
+        
+        # Add a subtle animation
+        title_y = 280 + math.sin(self.menu_animation_time * 3) * 5
+        title_shadow_rect = title_shadow.get_rect(center=(self.screen.get_width() // 2 + 3, title_y + 3))
+        title_rect = title.get_rect(center=(self.screen.get_width() // 2, title_y))
+        
         self.screen.blit(title_shadow, title_shadow_rect)
-        
-        # Main title
-        title = self.title_font.render("Rock-Paper-Scissors Board Game", True, title_color)
-        title_rect = title.get_rect(center=(self.screen.get_width() // 2, 250))
         self.screen.blit(title, title_rect)
-        
+    
         # Draw menu options as buttons
         options = [
             "Play Game (2 Players)",
             "Play Game (3 Players)",
-            "Watch AI Game (2 Players)",
-            "Watch AI Game (3 Players)",
+            "Play vs AI (Easy)",
+            "Play vs AI (Medium)",
+            "Play vs AI (Hard)",
+            "Play vs AI (Expert)",
+            "Watch AI Game",
             "Quit"
         ]
-        
+    
         button_width = 400
         button_height = 50
         button_margin = 20
-        y_offset = 320
-        
+        y_offset = 340
+    
         for i, option in enumerate(options):
             # Button background
             button_rect = pygame.Rect(
@@ -884,31 +1432,41 @@ class GameGUI:
                 button_width,
                 button_height
             )
-            
+        
             # Check if mouse is over button
             mouse_pos = pygame.mouse.get_pos()
-            button_color = (100, 100, 200)
-            text_color = WHITE
-            
-            if button_rect.collidepoint(mouse_pos):
-                button_color = (150, 150, 250)
-                
-            # Draw button
-            pygame.draw.rect(self.screen, button_color, button_rect, border_radius=10)
-            pygame.draw.rect(self.screen, WHITE, button_rect, 2, border_radius=10)
-            
-            # Draw button text
-            text = self.button_font.render(option, True, text_color)
-            text_rect = text.get_rect(center=button_rect.center)
-            self.screen.blit(text, text_rect)
-            
-            y_offset += button_height + button_margin
+            hover = button_rect.collidepoint(mouse_pos)
         
-        # Draw instructions
-        instructions = "Click on an option to select"
-        text = self.font.render(instructions, True, WHITE)
-        text_rect = text.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() - 50))
-        self.screen.blit(text, text_rect)
+            # Create a gradient button color (purple/blue)
+            if hover:
+                button_color = BUTTON_HOVER
+                # Add a glow effect when hovering
+                glow_surface = pygame.Surface((button_width + 10, button_height + 10), pygame.SRCALPHA)
+                for r in range(5, 0, -1):
+                    alpha = 50 - r * 8
+                    pygame.draw.rect(glow_surface, (*BUTTON_BORDER, alpha), 
+                                    (5-r, 5-r, button_width+r*2, button_height+r*2), 
+                                    border_radius=15)
+                self.screen.blit(glow_surface, 
+                                (button_rect.x - 5, button_rect.y - 5))
+            else:
+                button_color = BUTTON_COLOR
+        
+            # Draw button with rounded corners
+            pygame.draw.rect(self.screen, button_color, button_rect, border_radius=10)
+            pygame.draw.rect(self.screen, BUTTON_BORDER, button_rect, 2, border_radius=10)
+        
+            # Draw button text
+            text = self.button_font.render(option, True, WHITE)
+            text_rect = text.get_rect(center=button_rect.center)
+            
+            # Add a subtle bounce animation to the text when hovering
+            if hover:
+                text_rect.y += int(math.sin(self.menu_animation_time * 10) * 2)
+                
+            self.screen.blit(text, text_rect)
+        
+            y_offset += button_height + button_margin
     
     def draw_game_over(self):
         """Draw the game over screen"""
@@ -917,26 +1475,52 @@ class GameGUI:
         overlay.fill((0, 0, 0, 150))
         self.screen.blit(overlay, (0, 0))
         
-        # Draw game over message
+        # Create a panel for game over info
+        panel_width = 500
+        panel_height = 300
+        panel_x = (self.screen.get_width() - panel_width) // 2
+        panel_y = (self.screen.get_height() - panel_height) // 2
+        
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (40, 40, 100, 200), (0, 0, panel_width, panel_height), border_radius=20)
+        self.screen.blit(panel, (panel_x, panel_y))
+        
+        # Draw game over message with glow effect
+        for r in range(5, 0, -1):
+            alpha = 100 - r * 15
+            game_over_shadow = self.title_font.render("Game Over", True, (200, 200, 255, alpha))
+            shadow_rect = game_over_shadow.get_rect(center=(panel_x + panel_width // 2 + r, panel_y + 70 + r))
+            self.screen.blit(game_over_shadow, shadow_rect)
+            
         game_over = self.title_font.render("Game Over", True, WHITE)
-        game_over_rect = game_over.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 50))
+        game_over_rect = game_over.get_rect(center=(panel_x + panel_width // 2, panel_y + 70))
         self.screen.blit(game_over, game_over_rect)
         
-        # Draw winner message
+        # Draw winner message with animation
         if self.game.winner:
             winner_color = PLAYER_COLORS[self.game.winner.id - 1]
-            winner = self.font.render(f"{self.game.winner.name} wins!", True, winner_color)
+            
+            # Create animated background for winner
+            winner_bg = pygame.Surface((400, 60), pygame.SRCALPHA)
+            pulse = (math.sin(time.time() * 3) + 1) / 2  # Value between 0 and 1
+            bg_alpha = int(100 + pulse * 100)
+            pygame.draw.rect(winner_bg, (*winner_color, bg_alpha), (0, 0, 400, 60), border_radius=10)
+            self.screen.blit(winner_bg, (panel_x + 50, panel_y + 120))
+            
+            winner_text = self.button_font.render(f"{self.game.winner.name} wins!", True, WHITE)
+            winner_rect = winner_text.get_rect(center=(panel_x + panel_width // 2, panel_y + 150))
+            self.screen.blit(winner_text, winner_rect)
+            
             # Play win sound if not already played
             self.sound_manager.play('win')
         else:
-            winner = self.font.render("It's a draw!", True, WHITE)
-        
-        winner_rect = winner.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2))
-        self.screen.blit(winner, winner_rect)
+            draw_text = self.button_font.render("It's a draw!", True, WHITE)
+            draw_rect = draw_text.get_rect(center=(panel_x + panel_width // 2, panel_y + 150))
+            self.screen.blit(draw_text, draw_rect)
         
         # Draw instructions
-        instructions = self.font.render("Press SPACE to return to menu", True, WHITE)
-        instructions_rect = instructions.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 50))
+        instructions = self.button_font.render("Press SPACE to return to menu", True, WHITE)
+        instructions_rect = instructions.get_rect(center=(panel_x + panel_width // 2, panel_y + 220))
         self.screen.blit(instructions, instructions_rect)
     
     def handle_board_click(self, mouse_pos):
@@ -993,9 +1577,9 @@ class GameGUI:
         button_width = 400
         button_height = 50
         button_margin = 20
-        y_offset = 320
+        y_offset = 340
         
-        for i in range(5):  # 5 menu options
+        for i in range(8):  # 8 menu options now
             button_rect = pygame.Rect(
                 (self.screen.get_width() - button_width) // 2,
                 y_offset,
@@ -1010,11 +1594,25 @@ class GameGUI:
                     self.start_game(2)
                 elif i == 1:  # Play Game (3 Players)
                     self.start_game(3)
-                elif i == 2:  # Watch AI Game (2 Players)
+                elif i == 2:  # Play vs AI (Easy)
                     self.start_game(2, ai_mode=True)
-                elif i == 3:  # Watch AI Game (3 Players)
-                    self.start_game(3, ai_mode=True)
-                elif i == 4:  # Quit
+                    self.ai_difficulty = "easy"
+                    self.ai_player = None  # Will be created when needed
+                elif i == 3:  # Play vs AI (Medium)
+                    self.start_game(2, ai_mode=True)
+                    self.ai_difficulty = "medium"
+                    self.ai_player = None
+                elif i == 4:  # Play vs AI (Hard)
+                    self.start_game(2, ai_mode=True)
+                    self.ai_difficulty = "hard"
+                    self.ai_player = None
+                elif i == 5:  # Play vs AI (Expert)
+                    self.start_game(2, ai_mode=True)
+                    self.ai_difficulty = "expert"
+                    self.ai_player = None
+                elif i == 6:  # Watch AI Game
+                    self.start_ai_vs_ai_game()
+                elif i == 7:  # Quit
                     pygame.quit()
                     sys.exit()
                 
@@ -1022,74 +1620,69 @@ class GameGUI:
             
             y_offset += button_height + button_margin
     
+    def create_ai_player(self, difficulty="medium"):
+        """Create an AI player with the specified difficulty"""
+        if difficulty == "easy":
+            return RandomAI(self.game)
+        elif difficulty == "medium":
+            return BasicAI(self.game)
+        elif difficulty == "hard":
+            return AdvancedAI(self.game)
+        elif difficulty == "expert":
+            return MinimaxAI(self.game)
+        else:
+            # Default to medium
+            return BasicAI(self.game)
+    
     def play_ai_turn(self):
         """Play a turn for AI player"""
-        current_player = self.game.players[self.game.current_player_index]
-        pieces = self.game.board.get_player_pieces(current_player.id)
+        if not hasattr(self, 'ai_player') or self.ai_player is None:
+            self.ai_player = self.create_ai_player(self.ai_difficulty)
         
-        if not pieces:
+        # Let the AI choose a move
+        from_row, from_col, to_row, to_col = self.ai_player.choose_move()
+        
+        if from_row is None:  # No valid moves
+            self.game.next_turn()
             return
         
-        # Try each piece until finding one with valid moves
-        random.shuffle(pieces)
-        for row, col, piece in pieces:
-            valid_moves = self.game.get_valid_moves(row, col)
-            if valid_moves:
-                # Prioritize capturing enemy pieces
-                capturing_moves = []
-                safe_moves = []
-                
-                for to_row, to_col in valid_moves:
-                    target = self.game.board.grid[to_row][to_col]
-                    if target is None:
-                        safe_moves.append((to_row, to_col))
-                    else:
-                        # Check if we can win this combat
-                        result = self.game.board.resolve_combat(piece, target)
-                        if result == 1:  # We win
-                            capturing_moves.append((to_row, to_col))
-                        # If we lose, don't add to any list
-                
-                # Choose a move, prioritizing captures
-                if capturing_moves:
-                    to_row, to_col = random.choice(capturing_moves)
-                elif safe_moves:
-                    to_row, to_col = random.choice(safe_moves)
-                else:
-                    # If no good moves, just pick a random one
-                    to_row, to_col = random.choice(valid_moves)
-                
-                # Highlight the selected piece and move
-                self.selected_piece = (row, col)
-                self.valid_moves = [(to_row, to_col)]
-                
-                # Pause to show the selection
-                self.draw()
-                pygame.display.flip()
-                time.sleep(0.5)
-                
-                # Make the move
-                success, combat_type = self.game.play_turn(row, col, to_row, to_col)
-                
-                # Play appropriate sound
-                if combat_type:
-                    self.sound_manager.play(combat_type)
-                else:
-                    self.sound_manager.play('move')
-                
-                # Reset selection
-                self.selected_piece = None
-                self.valid_moves = []
-                
-                # Check if game is over
-                self.game.check_game_over()
-                if self.game.game_over:
-                    self.game_state = "game_over"
-                
-                return
+        # Highlight the selected piece and move for visual feedback
+        self.selected_piece = (from_row, from_col)
+        self.valid_moves = [(to_row, to_col)]
         
-        # If we get here, no valid moves were found
-        self.game.next_turn()
+        # Draw to show the selection
+        self.draw()
+        pygame.display.flip()
+        time.sleep(self.ai_player.thinking_time)  # Pause to show the AI "thinking"
+        
+        # Make the move
+        success, combat_type = self.game.play_turn(from_row, from_col, to_row, to_col)
+        
+        # Play appropriate sound
+        if combat_type:
+            self.sound_manager.play(combat_type)
+        else:
+            self.sound_manager.play('move')
+        
+        # Reset selection
+        self.selected_piece = None
+        self.valid_moves = []
+        
+        # Check if game is over
+        self.game.check_game_over()
+        if self.game.game_over:
+            self.game_state = "game_over"
+    
+    def start_ai_vs_ai_game(self):
+        """Start a game with AI players only"""
+        self.start_game(2, ai_mode=True)
+        self.ai_vs_ai = True
+        
+        # Create two different AI players
+        self.ai_players = {
+            1: self.create_ai_player("hard"),
+            2: self.create_ai_player("medium")
+        }
     
     def start_game(self, num_players, ai_mode=False):
         """Start a new game"""
@@ -1099,6 +1692,8 @@ class GameGUI:
         self.valid_moves = []
         self.game_state = "game"
         self.ai_mode = ai_mode
+        self.ai_vs_ai = False
+        self.ai_player = None
         self.sound_manager.play('game_start')
     
     def handle_resize(self, new_size):
@@ -1111,18 +1706,43 @@ class GameGUI:
         self.background_img = self.create_background()
     
     def draw(self):
-        """Draw the current game state"""
+        """Draw the current game state with improved visuals"""
         if self.game_state == "menu":
             self.draw_menu()
         elif self.game_state == "game":
-            # Draw a simpler background for the game
-            self.screen.fill((50, 50, 80))
+            # Draw a gradient background for the game
+            for y in range(self.screen.get_height()):
+                # Create a gradient from dark blue to slightly lighter blue
+                progress = y / self.screen.get_height()
+                r = int(20 + progress * 20)
+                g = int(20 + progress * 20)
+                b = int(50 + progress * 30)
+                color = (r, g, b)
+                pygame.draw.line(self.screen, color, (0, y), (self.screen.get_width(), y))
+        
+            # Add some stars to the background
+            for _ in range(30):
+                x = random.randint(0, self.screen.get_width())
+                y = random.randint(0, self.screen.get_height())
+                radius = random.randint(1, 2)
+                brightness = random.randint(150, 200)
+                color = (brightness, brightness, brightness)
+                pygame.draw.circle(self.screen, color, (x, y), radius)
+        
             self.draw_board()
             self.draw_game_info()
             self.draw_timer()
         elif self.game_state == "game_over":
             # Draw the game state behind the overlay
-            self.screen.fill((50, 50, 80))
+            for y in range(self.screen.get_height()):
+                # Create a gradient from dark blue to slightly lighter blue
+                progress = y / self.screen.get_height()
+                r = int(20 + progress * 20)
+                g = int(20 + progress * 20)
+                b = int(50 + progress * 30)
+                color = (r, g, b)
+                pygame.draw.line(self.screen, color, (0, y), (self.screen.get_width(), y))
+        
             self.draw_board()
             self.draw_game_info()
             self.draw_game_over()
@@ -1157,8 +1777,10 @@ class GameGUI:
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:  # Left click
                     if self.game_state == "menu":
                         self.handle_menu_click(event.pos)
-                    elif self.game_state == "game" and not self.ai_mode:
-                        self.handle_board_click(event.pos)
+                    elif self.game_state == "game":
+                        # In AI mode, only allow clicks when it's the human player's turn (Player 1)
+                        if not self.ai_mode or (self.ai_mode and self.game.players[self.game.current_player_index].id == 1):
+                            self.handle_board_click(event.pos)
             
             # Update game state
             if self.game_state == "game":
@@ -1170,7 +1792,14 @@ class GameGUI:
                 
                 # AI turn logic
                 if self.ai_mode and not self.game.game_over:
-                    self.play_ai_turn()
+                    current_player_id = self.game.players[self.game.current_player_index].id
+                    
+                    if self.ai_vs_ai:
+                        # AI vs AI mode - both players are AI
+                        self.ai_player = self.ai_players[current_player_id]
+                        self.play_ai_turn()
+                    elif current_player_id == 2:  # Assuming player 2 is AI
+                        self.play_ai_turn()
             
             # Draw everything
             self.draw()
